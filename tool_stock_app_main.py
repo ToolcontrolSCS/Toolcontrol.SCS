@@ -5,6 +5,9 @@ import requests
 import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta, timezone
+import schedule
+import time
+import threading
 
 # -------------------------------
 # CONFIG
@@ -56,6 +59,42 @@ def record_txn(sb, payload: dict):
     return res
 
 # -------------------------------
+# DAILY ALERT (08:00)
+# -------------------------------
+def send_daily_below_min():
+    try:
+        df_bal = pd.DataFrame(
+            sb.table("v_tool_balance_with_po").select("*").execute().data
+        )
+    except Exception:
+        return
+
+    if df_bal.empty:
+        return
+
+    below_min_df = df_bal[df_bal["is_below_min"] == True]
+
+    if below_min_df.empty:
+        msg = f"📅 Daily Report {tz_now().strftime('%d-%m-%Y')} 08:00\n✅ ไม่มีรายการต่ำกว่า MIN"
+    else:
+        msg = f"📅 Daily Report {tz_now().strftime('%d-%m-%Y')} 08:00\n🚨 รายการต่ำกว่า MIN:\n"
+        for _, row in below_min_df.iterrows():
+            msg += (
+                f"- {row['tool_code']} | {row['tool_name']} "
+                f"(Process: {row.get('process','-')})\n"
+                f"   On-hand: {int(row['on_hand'])} | "
+                f"Min: {int(row['min_stock'])} | "
+                f"On-PO: {int(row['on_po'])}\n"
+            )
+    send_telegram(msg)
+
+def run_scheduler():
+    schedule.every().day.at("08:00").do(send_daily_below_min)
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+# -------------------------------
 # MAIN
 # -------------------------------
 st.title("🛠️ Tool Stock Control Dashboard")
@@ -64,6 +103,11 @@ st.caption("Production support system | Timezone: GMT+7")
 sb = get_supabase()
 if sb is None:
     st.stop()
+
+# Start scheduler thread (รันครั้งเดียว)
+if "scheduler_started" not in st.session_state:
+    st.session_state["scheduler_started"] = True
+    threading.Thread(target=run_scheduler, daemon=True).start()
 
 tab_dash, tab_out, tab_in, tab_master, tab_txn = st.tabs(
     ["📊 Dashboard", "⬇️ Issue / Use (OUT)", "⬆️ Return / Receive (IN)", "🧰 Master Data", "🧾 Transactions"]
@@ -117,18 +161,21 @@ with tab_dash:
         if danger_only:
             view = view[view["is_below_min"] == True]
 
-        # Highlight rows
+        # Highlight rows + format integer
         def highlight_row(row):
-            if row["is_below_min"]:
-                return ["background-color: #ffcccc"] * len(row)
-            else:
-                return ["background-color: #ccffcc"] * len(row)
+            return ["background-color: #ffcccc" if row["is_below_min"] else ""] * len(row)
 
-        st.dataframe(
-            view.style.apply(highlight_row, axis=1),
-            use_container_width=True,
-            height=500
+        styled_view = (
+            view.style
+            .apply(highlight_row, axis=1)
+            .format({
+                "min_stock": "{:,.0f}",
+                "on_hand": "{:,.0f}",
+                "on_po": "{:,.0f}"
+            })
         )
+
+        st.dataframe(styled_view, use_container_width=True, height=500)
 
         st.download_button(
             "⬇️ Export Stock Balance CSV",
@@ -177,10 +224,12 @@ with tab_out:
             bal = sb.table("v_tool_balance_with_po").select("*").eq("tool_code", tool_code).execute()
             if bal.data and bal.data[0].get("is_below_min"):
                 item = bal.data[0]
-                msg = f"""⚠️ Below MIN
-Tool: {item['tool_code']} | {item.get('tool_name','')}
-On-hand: {item.get('on_hand')} < Min {item.get('min_stock')}
-On-PO: {item.get('on_po')}"""
+                msg = (
+                    f"🚨 Below MIN Event\n"
+                    f"Tool: {item['tool_code']} | {item.get('tool_name','')}\n"
+                    f"On-hand: {int(item.get('on_hand'))} < Min {int(item.get('min_stock'))}\n"
+                    f"On-PO: {int(item.get('on_po'))}"
+                )
                 send_telegram(msg)
         else:
             st.warning("กรุณาเลือก Tool และ Qty > 0")
@@ -230,8 +279,14 @@ with tab_in:
 with tab_master:
     st.markdown("## 🧰 Tool Master Data")
     dfm = get_master(sb)
-    st.dataframe(dfm, use_container_width=True)
-    st.download_button("⬇️ Export Tool Master CSV", data=dfm.to_csv(index=False), file_name="tool_master_export.csv")
+    if not dfm.empty:
+        styled_master = dfm.style.format({
+            "min_stock": "{:,.0f}",
+            "reorder_point": "{:,.0f}",
+            "safety_stock": "{:,.0f}"
+        })
+        st.dataframe(styled_master, use_container_width=True)
+        st.download_button("⬇️ Export Tool Master CSV", data=dfm.to_csv(index=False), file_name="tool_master_export.csv")
 
 # -------------------------------
 # Transactions
@@ -244,11 +299,14 @@ with tab_txn:
     if not dft.empty:
         dft["txn_time"] = pd.to_datetime(dft["txn_time"], errors="coerce")
 
-        # ถ้าไม่มี timezone → localize เป็น Asia/Bangkok
         if dft["txn_time"].dt.tz is None:
             dft["txn_time"] = dft["txn_time"].dt.tz_localize("Asia/Bangkok", nonexistent="shift_forward")
         else:
             dft["txn_time"] = dft["txn_time"].dt.tz_convert("Asia/Bangkok")
 
-    st.dataframe(dft, use_container_width=True)
-    st.download_button("⬇️ Export Transactions CSV", data=dft.to_csv(index=False), file_name="transactions_export.csv")
+        styled_txn = dft.style.format({
+            "qty": "{:,.0f}"
+        })
+
+        st.dataframe(styled_txn, use_container_width=True)
+        st.download_button("⬇️ Export Transactions CSV", data=dft.to_csv(index=False), file_name="transactions_export.csv")
