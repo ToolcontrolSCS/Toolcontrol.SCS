@@ -110,7 +110,7 @@ if "scheduler_started" not in st.session_state:
     threading.Thread(target=run_scheduler, daemon=True).start()
 
 tab_dash, tab_out, tab_in, tab_master, tab_txn = st.tabs(
-    ["📊 Dashboard", "⬇️ Issue / Use (OUT)", "⬆️ Return / Receive (IN)", "🧰 Master Data", "🧾 Transactions"]
+    ["📊 Dashboard", "📤 Issue / Use (OUT)", "📥 Return / Receive (IN)", "🧰 Master Data", "🧾 Transactions"]
 )
 
 # -------------------------------
@@ -189,7 +189,7 @@ with tab_dash:
 # OUT Transaction
 # -------------------------------
 with tab_out:
-    st.markdown("## ⬇️ Issue / Use (OUT)")
+    st.markdown("## 📤 Issue / Use (OUT)")
 
     mdf = get_master(sb)
     tool = st.selectbox("Tool", options=(mdf["tool_code"] + " | " + mdf["tool_name"]) if not mdf.empty else [])
@@ -221,15 +221,19 @@ with tab_out:
             record_txn(sb, payload)
             st.success("✅ OUT transaction saved")
 
+            # Balance + แจ้งเตือน
             bal = sb.table("v_tool_balance_with_po").select("*").eq("tool_code", tool_code).execute()
-            if bal.data and bal.data[0].get("is_below_min"):
+            if bal.data:
                 item = bal.data[0]
                 msg = (
-                    f"🚨 Below MIN Event\n"
+                    f"📤 OUT Transaction\n"
                     f"Tool: {item['tool_code']} | {item.get('tool_name','')}\n"
-                    f"On-hand: {int(item.get('on_hand'))} < Min {int(item.get('min_stock'))}\n"
-                    f"On-PO: {int(item.get('on_po'))}"
+                    f"Qty OUT: {int(qty)} | Operator: {operator or '-'}\n"
+                    f"Dept: {dept or '-'} | Machine: {machine or '-'}\n"
+                    f"On-hand: {int(item.get('on_hand'))} | Min: {int(item.get('min_stock'))} | On-PO: {int(item.get('on_po'))}"
                 )
+                if item.get("is_below_min"):
+                    msg += "\n🚨 ALERT: On-hand ต่ำกว่า MIN!"
                 send_telegram(msg)
         else:
             st.warning("กรุณาเลือก Tool และ Qty > 0")
@@ -238,7 +242,7 @@ with tab_out:
 # IN Transaction
 # -------------------------------
 with tab_in:
-    st.markdown("## ⬆️ Return / Receive (IN)")
+    st.markdown("## 📥 Return / Receive (IN)")
 
     mdf = get_master(sb)
     tool = st.selectbox("Tool ", options=(mdf["tool_code"] + " | " + mdf["tool_name"]) if not mdf.empty else [], key="in_tool")
@@ -270,6 +274,17 @@ with tab_in:
             }
             record_txn(sb, payload)
             st.success("✅ IN transaction saved")
+
+            # แจ้ง Telegram ทุกครั้งที่รับเข้า
+            msg = (
+                f"📥 IN Transaction\n"
+                f"Tool: {tool_code}\n"
+                f"Qty IN: {int(qty)} | Operator: {operator or '-'}\n"
+                f"Dept: {dept or '-'} | Machine: {machine or '-'}\n"
+                f"Remark: {remark}\n"
+                f"Reason: {reason} | Ref: {refdoc or '-'}"
+            )
+            send_telegram(msg)
         else:
             st.warning("กรุณาเลือก Tool และ Qty > 0")
 
