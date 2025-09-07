@@ -1,3 +1,5 @@
+# tool_stock_app_main.py
+
 import os
 import requests
 import pandas as pd
@@ -39,7 +41,6 @@ def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def send_telegram(msg: str):
-    """ส่งข้อความไป Telegram"""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -66,12 +67,10 @@ def send_daily_below_min():
         )
     except Exception:
         return
-
     if df_bal.empty:
         return
 
     below_min_df = df_bal[df_bal["is_below_min"] == True]
-
     if below_min_df.empty:
         msg = f"📅 Daily Report {tz_now().strftime('%d-%m-%Y')} 08:00\n✅ ไม่มีรายการต่ำกว่า MIN"
     else:
@@ -102,25 +101,34 @@ sb = get_supabase()
 if sb is None:
     st.stop()
 
-# Start scheduler thread (รันครั้งเดียว)
+# Start scheduler thread
 if "scheduler_started" not in st.session_state:
     st.session_state["scheduler_started"] = True
     threading.Thread(target=run_scheduler, daemon=True).start()
 
-tab_dash, tab_out, tab_in, tab_master, tab_txn, tab_po = st.tabs(
-    ["📊 Dashboard", "📤 Issue / Use (OUT)", "📥 Return / Receive (IN)", "🧰 Master Data", "🧾 Transactions", "📦 PO Management"]
+# -------------------------------
+# Sidebar menu
+# -------------------------------
+menu = st.sidebar.selectbox(
+    "เลือกโหมด",
+    [
+        "📊 Dashboard",
+        "📤 Issue / Use (OUT)",
+        "📥 Return / Receive (IN)",
+        "🧰 Master Data",
+        "🧾 Transactions",
+        "📦 PO Management"
+    ]
 )
 
 # -------------------------------
 # Dashboard
 # -------------------------------
-with tab_dash:
-    st.markdown("## 📊 🛠️ Tool Stock Control Dashboard")
+if menu == "📊 Dashboard":
+    st.subheader("📊 Stock Dashboard")
 
     try:
-        df_bal = pd.DataFrame(
-            sb.table("v_tool_balance_with_po").select("*").execute().data
-        )
+        df_bal = pd.DataFrame(sb.table("v_tool_balance_with_po").select("*").execute().data)
     except Exception as e:
         st.error(f"Query failed: {e}")
         df_bal = pd.DataFrame()
@@ -170,41 +178,25 @@ with tab_dash:
                 "on_po": "{:,.0f}"
             })
         )
-
         st.dataframe(styled_view, use_container_width=True, height=500)
-
-        st.download_button(
-            "⬇️ Export Stock Balance CSV",
-            data=view.to_csv(index=False),
-            file_name=f"stock_balance_{tz_now().strftime('%Y%m%d_%H%M')}.csv"
-        )
-    else:
-        st.info("No data in v_tool_balance_with_po")
 
 # -------------------------------
 # OUT Transaction
 # -------------------------------
-with tab_out:
-    st.markdown("## 📤 Issue / Use (OUT)")
+elif menu == "📤 Issue / Use (OUT)":
+    st.subheader("📤 Issue / Use (OUT)")
 
     mdf = get_master(sb)
     if not mdf.empty:
-        tool = st.selectbox(
-            "Tool",
-            options=(mdf["tool_code"] + " | " + mdf["tool_name"])
-        )
+        tool = st.selectbox("Tool", options=(mdf["tool_code"] + " | " + mdf["tool_name"]))
         tool_code = tool.split(" | ")[0] if tool else None
 
-        c1, c2, c3 = st.columns(3)
-        qty = c1.number_input("Qty OUT", min_value=0.0, step=1.0)
-        dept = c2.text_input("Department")
-        machine = c3.text_input("Machine Code")
-
-        c4, c5, c6 = st.columns(3)
-        partno = c4.text_input("Part No.")
-        shift = c5.text_input("Shift (01D/01N)")
-        operator = c6.text_input("Operator")
-
+        qty = st.number_input("Qty OUT", min_value=0.0, step=1.0)
+        dept = st.text_input("Department")
+        machine = st.text_input("Machine Code")
+        partno = st.text_input("Part No.")
+        shift = st.text_input("Shift (01D/01N)")
+        operator = st.text_input("Operator")
         reason = st.text_input("Reason", value="Issue")
         refdoc = st.text_input("Reference Doc")
 
@@ -220,191 +212,110 @@ with tab_out:
                 }
                 record_txn(sb, payload)
                 st.success("✅ OUT transaction saved")
-
-                bal = sb.table("v_tool_balance_with_po").select("*").eq("tool_code", tool_code).execute()
-                if bal.data:
-                    item = bal.data[0]
-                    msg = (
-                        f"📤 OUT Transaction\n"
-                        f"Tool: {item['tool_code']} | {item.get('tool_name','')}\n"
-                        f"Qty OUT: {int(qty)} | Operator: {operator or '-'}\n"
-                        f"Dept: {dept or '-'} | Machine: {machine or '-'}\n"
-                        f"On-hand: {int(item.get('on_hand'))} | Min: {int(item.get('min_stock'))} | On-PO: {int(item.get('on_po'))}"
-                    )
-                    if item.get("is_below_min"):
-                        msg += "\n🚨 ALERT: On-hand ต่ำกว่า MIN!"
-                    send_telegram(msg)
-            else:
-                st.warning("กรุณาเลือก Tool และ Qty > 0")
+                send_telegram(f"📤 OUT {tool_code} Qty {int(qty)} | On {tz_now().strftime('%d-%m %H:%M')}")
     else:
-        st.info("⚠️ ยังไม่มี Tool Master กรุณาเพิ่มข้อมูลใน Master ก่อน")
+        st.info("⚠️ ไม่มี Tool Master")
 
 # -------------------------------
 # IN Transaction
 # -------------------------------
-with tab_in:
-    st.markdown("## 📥 Return / Receive (IN)")
+elif menu == "📥 Return / Receive (IN)":
+    st.subheader("📥 Return / Receive (IN)")
 
     mdf = get_master(sb)
-    tool = st.selectbox("Tool ", options=(mdf["tool_code"] + " | " + mdf["tool_name"]) if not mdf.empty else [], key="in_tool")
-    tool_code = tool.split(" | ")[0] if tool else None
+    if not mdf.empty:
+        tool = st.selectbox("Tool", options=(mdf["tool_code"] + " | " + mdf["tool_name"]))
+        tool_code = tool.split(" | ")[0] if tool else None
 
-    c1, c2, c3 = st.columns(3)
-    qty = c1.number_input("Qty IN", min_value=0.0, step=1.0, key="qty_in")
-    dept = c2.text_input("Department", key="dept_in")
-    machine = c3.text_input("Machine Code", key="mc_in")
+        qty = st.number_input("Qty IN", min_value=0.0, step=1.0)
+        dept = st.text_input("Department")
+        machine = st.text_input("Machine Code")
+        partno = st.text_input("Part No.")
+        shift = st.text_input("Shift")
+        operator = st.text_input("Operator")
+        reason = st.text_input("Reason", value="Receive")
+        remark = st.selectbox("Remark", ["New","Modify","Return"])
+        refdoc = st.text_input("Reference Doc")
 
-    c4, c5, c6 = st.columns(3)
-    partno = c4.text_input("Part No.", key="pn_in")
-    shift = c5.text_input("Shift", key="shift_in")
-    operator = c6.text_input("Operator", key="op_in")
-
-    reason = st.text_input("Reason", value="Receive/Return", key="reason_in")
-    remark = st.selectbox("Remark", options=["New","Modify","Return"], key="remark_in")
-    refdoc = st.text_input("Reference Doc", key="ref_in")
-
-    if st.button("💾 Save IN", type="primary"):
-        if tool_code and qty > 0:
-            payload = {
-                "tool_code": tool_code, "direction": "IN", "qty": qty,
-                "dept": dept or None, "machine_code": machine or None,
-                "part_no": partno or None, "shift": shift or None,
-                "reason": reason or None, "remark": remark or None,
-                "ref_doc": refdoc or None, "operator": operator or None,
-                "txn_time": tz_now().isoformat()
-            }
-            record_txn(sb, payload)
-            st.success("✅ IN transaction saved")
-
-            msg = (
-                f"📥 IN Transaction\n"
-                f"Tool: {tool_code}\n"
-                f"Qty IN: {int(qty)} | Operator: {operator or '-'}\n"
-                f"Dept: {dept or '-'} | Machine: {machine or '-'}\n"
-                f"Remark: {remark}\n"
-                f"Reason: {reason} | Ref: {refdoc or '-'}"
-            )
-            send_telegram(msg)
-        else:
-            st.warning("กรุณาเลือก Tool และ Qty > 0")
+        if st.button("💾 Save IN", type="primary"):
+            if tool_code and qty > 0:
+                payload = {
+                    "tool_code": tool_code, "direction": "IN", "qty": qty,
+                    "dept": dept or None, "machine_code": machine or None,
+                    "part_no": partno or None, "shift": shift or None,
+                    "reason": reason or None, "remark": remark or None,
+                    "ref_doc": refdoc or None, "operator": operator or None,
+                    "txn_time": tz_now().isoformat()
+                }
+                record_txn(sb, payload)
+                st.success("✅ IN transaction saved")
+                send_telegram(f"📥 IN {tool_code} Qty {int(qty)} Remark {remark}")
+    else:
+        st.info("⚠️ ไม่มี Tool Master")
 
 # -------------------------------
 # Master Data
 # -------------------------------
-with tab_master:
-    st.markdown("## 🧰 Tool Master Data")
+elif menu == "🧰 Master Data":
+    st.subheader("🧰 Tool Master Data")
     dfm = get_master(sb)
-    if not dfm.empty:
-        styled_master = dfm.style.format({
-            "min_stock": "{:,.0f}",
-            "reorder_point": "{:,.0f}",
-            "safety_stock": "{:,.0f}"
-        })
-        st.dataframe(styled_master, use_container_width=True)
-        st.download_button("⬇️ Export Tool Master CSV", data=dfm.to_csv(index=False), file_name="tool_master_export.csv")
+    st.dataframe(dfm, use_container_width=True)
 
 # -------------------------------
 # Transactions
 # -------------------------------
-with tab_txn:
-    st.markdown("## 🧾 Recent Transactions (ล่าสุด 300 รายการ)")
+elif menu == "🧾 Transactions":
+    st.subheader("🧾 Recent Transactions")
     dft = pd.DataFrame(
-        sb.table("tool_stock_txn").select("*").order("txn_time", desc=True).limit(300).execute().data
+        sb.table("tool_stock_txn").select("*").order("txn_time", desc=True).limit(200).execute().data
     )
     if not dft.empty:
         dft["txn_time"] = pd.to_datetime(dft["txn_time"], errors="coerce")
-        if dft["txn_time"].dt.tz is None:
-            dft["txn_time"] = dft["txn_time"].dt.tz_localize("Asia/Bangkok", nonexistent="shift_forward")
-        else:
-            dft["txn_time"] = dft["txn_time"].dt.tz_convert("Asia/Bangkok")
-
-        styled_txn = dft.style.format({
-            "qty": "{:,.0f}"
-        })
-
-        st.dataframe(styled_txn, use_container_width=True)
-        st.download_button("⬇️ Export Transactions CSV", data=dft.to_csv(index=False), file_name="transactions_export.csv")
+        st.dataframe(dft, use_container_width=True)
 
 # -------------------------------
 # PO Management
 # -------------------------------
-with tab_po:
-    st.markdown("## 📦 PO Management")
+elif menu == "📦 PO Management":
+    st.subheader("📦 PO Management")
 
-    menu = st.radio("เลือกเมนู", ["สร้าง PO ใหม่","รับเข้า (Receive PO)","รายการ PO"])
-    # ---------------- Create PO ----------------
-    if menu == "สร้าง PO ใหม่":
+    action = st.radio("เลือกการทำงาน", ["📑 สร้าง PO", "➕ เพิ่ม Item", "📥 Receive PO"])
+
+    # Create PO
+    if action == "📑 สร้าง PO":
         po_number = st.text_input("PO Number")
         supplier = st.text_input("Supplier")
-        created_by = st.text_input("Approved By")
-
-        if st.button("💾 Create PO Header"):
+        approved_by = st.text_input("Approved by")
+        if st.button("💾 Save PO"):
             if po_number:
-                payload = {
-                    "po_number": po_number,
-                    "supplier": supplier,
-                    "approved_by": created_by,
-                    "status": "Approved"
-                }
-                res = sb.table("po_header").insert(payload).execute()
-                if res.data:
-                    st.success(f"✅ สร้าง PO {po_number} สำเร็จ")
-            else:
-                st.warning("กรุณาใส่ PO Number")
+                payload = {"po_number": po_number, "supplier": supplier, "approved_by": approved_by, "status": "Approved"}
+                sb.table("po_header").insert(payload).execute()
+                st.success("✅ PO created")
 
-        st.divider()
-        st.markdown("### ➕ เพิ่ม PO Items")
-        dfm = get_master(sb)
-        po_id = st.text_input("PO ID (จาก po_header)")
-        tool = st.selectbox("Tool", options=(dfm["tool_code"] + " | " + dfm["tool_name"]) if not dfm.empty else [], key="po_item_tool")
-        tool_code = tool.split(" | ")[0] if tool else None
-        qty = st.number_input("Request Qty", min_value=0.0, step=1.0, key="po_qty")
+    # Add Item
+    elif action == "➕ เพิ่ม Item":
+        poh = pd.DataFrame(sb.table("po_header").select("*").eq("status","Approved").execute().data)
+        if not poh.empty:
+            po_select = st.selectbox("เลือก PO", poh["po_number"].tolist())
+            po_id = poh[poh["po_number"] == po_select]["id"].iloc[0]
 
-        if st.button("➕ Add Item"):
-            if po_id and tool_code and qty > 0:
-                payload = {
-                    "po_id": po_id,
-                    "tool_code": tool_code,
-                    "request_qty": qty
-                }
-                sb.table("po_items").insert(payload).execute()
-                st.success("✅ เพิ่มรายการเข้า PO สำเร็จ")
+            mdf = get_master(sb)
+            tool = st.selectbox("Tool", options=(mdf["tool_code"] + " | " + mdf["tool_name"]))
+            tool_code = tool.split(" | ")[0] if tool else None
+            qty = st.number_input("Request Qty", min_value=0.0, step=1.0)
 
-    # ---------------- Receive PO ----------------
-    elif menu == "รับเข้า (Receive PO)":
-        df_po = pd.DataFrame(sb.table("v_po_tracking").select("*").limit(200).execute().data)
-        if not df_po.empty:
-            st.dataframe(df_po, use_container_width=True, height=400)
+            if st.button("💾 Save Item"):
+                sb.table("po_items").insert({"po_id": po_id, "tool_code": tool_code, "request_qty": qty}).execute()
+                st.success("✅ Item added")
+
+    # Receive PO
+    elif action == "📥 Receive PO":
+        po_df = pd.DataFrame(sb.table("v_po_tracking").select("*").eq("item_status","Pending").execute().data)
+        if not po_df.empty:
+            st.dataframe(po_df, use_container_width=True)
             po_item_id = st.number_input("PO Item ID", min_value=0, step=1)
-            receive_qty = st.number_input("Receive Qty", min_value=0.0, step=1.0)
-            operator = st.text_input("Operator")
-
-            if st.button("📥 Receive"):
-                if po_item_id and receive_qty > 0:
-                    po_item = sb.table("po_items").select("*").eq("id", po_item_id).execute()
-                    if po_item.data:
-                        item = po_item.data[0]
-                        new_received = item["received_qty"] + receive_qty
-                        status = "Received" if new_received >= item["request_qty"] else "Partially Received"
-
-                        sb.table("po_items").update({
-                            "received_qty": new_received,
-                            "status": status
-                        }).eq("id", po_item_id).execute()
-
-                        # Insert เข้า stock txn
-                        payload = {
-                            "tool_code": item["tool_code"], "direction": "IN", "qty": receive_qty,
-                            "reason": "PO Receive", "remark": "New", "operator": operator or None,
-                            "txn_time": tz_now().isoformat()
-                        }
-                        record_txn(sb, payload)
-                        st.success("✅ Receive สำเร็จ และอัปเดต Stock แล้ว")
-                        send_telegram(f"📦 PO Receive\nTool: {item['tool_code']}\nQty: {int(receive_qty)}")
-        else:
-            st.info("ยังไม่มีข้อมูล PO")
-
-    # ---------------- รายการ PO ----------------
-    elif menu == "รายการ PO":
-        df_po = pd.DataFrame(sb.table("v_po_tracking").select("*").limit(200).execute().data)
-        if not df
+            qty = st.number_input("Receive Qty", min_value=0.0, step=1.0)
+            if st.button("📥 Receive Item"):
+                if po_item_id and qty > 0:
+                    sb.rpc("receive_po_item", {"p_item_id": po_item_id, "p_qty": qty}).execute()
+                    st.success("✅ Received")
