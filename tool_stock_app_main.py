@@ -6,12 +6,8 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 
-# ตั้งค่าเพจ
 st.set_page_config(page_title="Tool Stock Control", page_icon="🛠️", layout="wide")
 
-# ===============================
-# CONFIG
-# ===============================
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
@@ -23,14 +19,10 @@ except ImportError:
     st.error("❌ Missing dependency: run `pip install supabase`")
     st.stop()
 
-# ใช้เวลาไทย
 TZ = timezone(timedelta(hours=7))
 def tz_now():
     return datetime.now(TZ)
 
-# ===============================
-# CONNECT SUPABASE
-# ===============================
 @st.cache_resource
 def get_supabase():
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -39,7 +31,6 @@ def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def send_telegram(msg: str):
-    """ส่งข้อความไป Telegram"""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -48,9 +39,6 @@ def send_telegram(msg: str):
     except Exception as e:
         st.warning(f"⚠️ Telegram send failed: {e}")
 
-# ===============================
-# FUNCTIONS
-# ===============================
 def get_master(sb):
     res = sb.table("tool_master").select("*").eq("is_active", True).order("tool_code").execute()
     return pd.DataFrame(res.data)
@@ -59,9 +47,6 @@ def record_txn(sb, payload: dict):
     res = sb.table("tool_stock_txn").insert(payload).execute()
     return res
 
-# ===============================
-# UI MAIN
-# ===============================
 st.title("🛠️ Tool Stock Control")
 st.caption("Prevent production stop by monitoring actual tool stock (GMT+7).")
 
@@ -89,8 +74,17 @@ with tab_dash:
 
     if not df_bal.empty:
         col1, col2 = st.columns(2)
-        with col1:
-            process = st.selectbox("Filter by process", options=["All"] + df_bal["process"].dropna().unique().tolist())
+        # เช็คก่อนว่ามี process ไหม
+        if "process" in df_bal.columns:
+            with col1:
+                process = st.selectbox(
+                    "Filter by process",
+                    options=["All"] + df_bal["process"].dropna().unique().tolist()
+                )
+        else:
+            process = "All"
+            st.info("⚠️ Column 'process' not found in view")
+
         with col2:
             danger_only = st.checkbox("Show only below MIN", value=False)
 
