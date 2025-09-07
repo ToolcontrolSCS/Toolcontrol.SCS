@@ -6,6 +6,9 @@ import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta, timezone
 
+# -------------------------------
+# CONFIG
+# -------------------------------
 st.set_page_config(page_title="Tool Stock Control", page_icon="🛠️", layout="wide")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
@@ -19,18 +22,23 @@ except ImportError:
     st.error("❌ Missing dependency: run `pip install supabase`")
     st.stop()
 
+# Timezone
 TZ = timezone(timedelta(hours=7))
 def tz_now():
     return datetime.now(TZ)
 
+# -------------------------------
+# SUPABASE
+# -------------------------------
 @st.cache_resource
 def get_supabase():
     if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("⚠️ Please set SUPABASE_URL and SUPABASE_KEY in environment/secrets.")
+        st.error("⚠️ Please set SUPABASE_URL and SUPABASE_KEY in secrets.toml")
         return None
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def send_telegram(msg: str):
+    """ส่งข้อความไป Telegram"""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -47,8 +55,11 @@ def record_txn(sb, payload: dict):
     res = sb.table("tool_stock_txn").insert(payload).execute()
     return res
 
-st.title("🛠️ Tool Stock Control")
-st.caption("Prevent production stop by monitoring actual tool stock (GMT+7).")
+# -------------------------------
+# MAIN
+# -------------------------------
+st.title("🛠️ Tool Stock Control Dashboard")
+st.caption("Production support system | Timezone: GMT+7")
 
 sb = get_supabase()
 if sb is None:
@@ -62,7 +73,7 @@ tab_dash, tab_out, tab_in, tab_master, tab_txn = st.tabs(
 # Dashboard
 # -------------------------------
 with tab_dash:
-    st.subheader("Stock Health / Reorder Suggestion")
+    st.markdown("## 📊 Stock Health Overview")
 
     try:
         df_bal = pd.DataFrame(
@@ -73,20 +84,32 @@ with tab_dash:
         df_bal = pd.DataFrame()
 
     if not df_bal.empty:
-        col1, col2 = st.columns(2)
-        # เช็คก่อนว่ามี process ไหม
+        # KPI
+        total_tools = len(df_bal)
+        below_min = df_bal[df_bal["is_below_min"] == True].shape[0]
+        total_on_hand = df_bal["on_hand"].sum()
+        total_on_po = df_bal["on_po"].sum()
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("🛠️ Tools", f"{total_tools}")
+        c2.metric("⚠️ Below MIN", f"{below_min}")
+        c3.metric("📦 On-hand Total", f"{total_on_hand:,.0f}")
+        c4.metric("📝 On-PO Total", f"{total_on_po:,.0f}")
+
+        st.divider()
+
+        col1, col2 = st.columns([2,1])
         if "process" in df_bal.columns:
             with col1:
                 process = st.selectbox(
-                    "Filter by process",
+                    "🔍 Filter by process",
                     options=["All"] + df_bal["process"].dropna().unique().tolist()
                 )
         else:
             process = "All"
-            st.info("⚠️ Column 'process' not found in view")
 
         with col2:
-            danger_only = st.checkbox("Show only below MIN", value=False)
+            danger_only = st.checkbox("🚨 Show only below MIN", value=False)
 
         view = df_bal.copy()
         if process != "All" and "process" in view.columns:
@@ -94,7 +117,19 @@ with tab_dash:
         if danger_only:
             view = view[view["is_below_min"] == True]
 
-        st.dataframe(view, use_container_width=True)
+        # Highlight rows
+        def highlight_row(row):
+            if row["is_below_min"]:
+                return ["background-color: #ffcccc"] * len(row)
+            else:
+                return ["background-color: #ccffcc"] * len(row)
+
+        st.dataframe(
+            view.style.apply(highlight_row, axis=1),
+            use_container_width=True,
+            height=500
+        )
+
         st.download_button(
             "⬇️ Export Stock Balance CSV",
             data=view.to_csv(index=False),
@@ -107,7 +142,7 @@ with tab_dash:
 # OUT Transaction
 # -------------------------------
 with tab_out:
-    st.subheader("Issue / Use (OUT)")
+    st.markdown("## ⬇️ Issue / Use (OUT)")
 
     mdf = get_master(sb)
     tool = st.selectbox("Tool", options=(mdf["tool_code"] + " | " + mdf["tool_name"]) if not mdf.empty else [])
@@ -126,7 +161,7 @@ with tab_out:
     reason = st.text_input("Reason", value="Issue")
     refdoc = st.text_input("Reference Doc")
 
-    if st.button("💾 Save OUT"):
+    if st.button("💾 Save OUT", type="primary"):
         if tool_code and qty > 0:
             payload = {
                 "tool_code": tool_code, "direction": "OUT", "qty": qty,
@@ -139,7 +174,6 @@ with tab_out:
             record_txn(sb, payload)
             st.success("✅ OUT transaction saved")
 
-            # ตรวจสอบ min
             bal = sb.table("v_tool_balance_with_po").select("*").eq("tool_code", tool_code).execute()
             if bal.data and bal.data[0].get("is_below_min"):
                 item = bal.data[0]
@@ -155,7 +189,7 @@ On-PO: {item.get('on_po')}"""
 # IN Transaction
 # -------------------------------
 with tab_in:
-    st.subheader("Return / Receive (IN)")
+    st.markdown("## ⬆️ Return / Receive (IN)")
 
     mdf = get_master(sb)
     tool = st.selectbox("Tool ", options=(mdf["tool_code"] + " | " + mdf["tool_name"]) if not mdf.empty else [], key="in_tool")
@@ -175,7 +209,7 @@ with tab_in:
     remark = st.selectbox("Remark", options=["New","Modify","Return"], key="remark_in")
     refdoc = st.text_input("Reference Doc", key="ref_in")
 
-    if st.button("💾 Save IN"):
+    if st.button("💾 Save IN", type="primary"):
         if tool_code and qty > 0:
             payload = {
                 "tool_code": tool_code, "direction": "IN", "qty": qty,
@@ -194,7 +228,7 @@ with tab_in:
 # Master Data
 # -------------------------------
 with tab_master:
-    st.subheader("Tool Master Data")
+    st.markdown("## 🧰 Tool Master Data")
     dfm = get_master(sb)
     st.dataframe(dfm, use_container_width=True)
     st.download_button("⬇️ Export Tool Master CSV", data=dfm.to_csv(index=False), file_name="tool_master_export.csv")
@@ -203,11 +237,18 @@ with tab_master:
 # Transactions
 # -------------------------------
 with tab_txn:
-    st.subheader("Recent Transactions (ล่าสุด 300 รายการ)")
+    st.markdown("## 🧾 Recent Transactions (ล่าสุด 300 รายการ)")
     dft = pd.DataFrame(
         sb.table("tool_stock_txn").select("*").order("txn_time", desc=True).limit(300).execute().data
     )
     if not dft.empty:
-        dft["txn_time"] = pd.to_datetime(dft["txn_time"]).dt.tz_convert("Asia/Bangkok")
+        dft["txn_time"] = pd.to_datetime(dft["txn_time"], errors="coerce")
+
+        # ถ้าไม่มี timezone → localize เป็น Asia/Bangkok
+        if dft["txn_time"].dt.tz is None:
+            dft["txn_time"] = dft["txn_time"].dt.tz_localize("Asia/Bangkok", nonexistent="shift_forward")
+        else:
+            dft["txn_time"] = dft["txn_time"].dt.tz_convert("Asia/Bangkok")
+
     st.dataframe(dft, use_container_width=True)
     st.download_button("⬇️ Export Transactions CSV", data=dft.to_csv(index=False), file_name="transactions_export.csv")
