@@ -117,7 +117,7 @@ tab_dash, tab_out, tab_in, tab_master, tab_txn = st.tabs(
 # Dashboard
 # -------------------------------
 with tab_dash:
-    st.markdown("## 📊 Tool Stock Overview")
+    st.markdown("## 📊 🛠️ Tool Stock Control Dashboard")
 
     try:
         df_bal = pd.DataFrame(
@@ -325,4 +325,5 @@ with tab_txn:
 
         st.dataframe(styled_txn, use_container_width=True)
         st.download_button("⬇️ Export Transactions CSV", data=dft.to_csv(index=False), file_name="transactions_export.csv")
+
 
