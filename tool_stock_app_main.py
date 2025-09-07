@@ -1,5 +1,3 @@
-# tool_stock_app_main.py
-
 import os
 import requests
 import pandas as pd
@@ -8,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import schedule
 import time
 import threading
+from supabase import create_client
 
 # -------------------------------
 # CONFIG
@@ -18,12 +17,6 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-
-try:
-    from supabase import create_client
-except ImportError:
-    st.error("❌ Missing dependency: run `pip install supabase`")
-    st.stop()
 
 # Timezone
 TZ = timezone(timedelta(hours=7))
@@ -109,16 +102,17 @@ if "scheduler_started" not in st.session_state:
     st.session_state["scheduler_started"] = True
     threading.Thread(target=run_scheduler, daemon=True).start()
 
-tab_dash, tab_out, tab_in, tab_master, tab_txn = st.tabs(
+# Sidebar menu
+menu = st.sidebar.radio(
+    "📌 Select Menu",
     ["📊 Dashboard", "📤 Issue / Use (OUT)", "📥 Return / Receive (IN)", "🧰 Master Data", "🧾 Transactions"]
 )
 
 # -------------------------------
 # Dashboard
 # -------------------------------
-with tab_dash:
-    st.markdown("## 📊 🛠️ Tool Stock Control Dashboard")
-
+if menu == "📊 Dashboard":
+    st.subheader("📊 🛠️ Tool Stock Control Dashboard")
     try:
         df_bal = pd.DataFrame(
             sb.table("v_tool_balance_with_po").select("*").execute().data
@@ -161,7 +155,6 @@ with tab_dash:
         if danger_only:
             view = view[view["is_below_min"] == True]
 
-        # Highlight rows + format integer
         def highlight_row(row):
             return ["background-color: #ffcccc" if row["is_below_min"] else ""] * len(row)
 
@@ -188,23 +181,18 @@ with tab_dash:
 # -------------------------------
 # OUT Transaction
 # -------------------------------
-with tab_out:
-    st.markdown("## 📤 Issue / Use (OUT)")
-
+elif menu == "📤 Issue / Use (OUT)":
+    st.subheader("📤 Issue / Use (OUT)")
     mdf = get_master(sb)
     tool = st.selectbox("Tool", options=(mdf["tool_code"] + " | " + mdf["tool_name"]) if not mdf.empty else [])
     tool_code = tool.split(" | ")[0] if tool else None
 
-    c1, c2, c3 = st.columns(3)
-    qty = c1.number_input("Qty OUT", min_value=0.0, step=1.0)
-    dept = c2.text_input("Department")
-    machine = c3.text_input("Machine Code")
-
-    c4, c5, c6 = st.columns(3)
-    partno = c4.text_input("Part No.")
-    shift = c5.text_input("Shift (01D/01N)")
-    operator = c6.text_input("Operator")
-
+    qty = st.number_input("Qty OUT", min_value=0.0, step=1.0)
+    dept = st.text_input("Department")
+    machine = st.text_input("Machine Code")
+    partno = st.text_input("Part No.")
+    shift = st.text_input("Shift (01D/01N)")
+    operator = st.text_input("Operator")
     reason = st.text_input("Reason", value="Issue")
     refdoc = st.text_input("Reference Doc")
 
@@ -221,7 +209,6 @@ with tab_out:
             record_txn(sb, payload)
             st.success("✅ OUT transaction saved")
 
-            # Balance + แจ้งเตือน
             bal = sb.table("v_tool_balance_with_po").select("*").eq("tool_code", tool_code).execute()
             if bal.data:
                 item = bal.data[0]
@@ -241,23 +228,18 @@ with tab_out:
 # -------------------------------
 # IN Transaction
 # -------------------------------
-with tab_in:
-    st.markdown("## 📥 Return / Receive (IN)")
-
+elif menu == "📥 Return / Receive (IN)":
+    st.subheader("📥 Return / Receive (IN)")
     mdf = get_master(sb)
     tool = st.selectbox("Tool ", options=(mdf["tool_code"] + " | " + mdf["tool_name"]) if not mdf.empty else [], key="in_tool")
     tool_code = tool.split(" | ")[0] if tool else None
 
-    c1, c2, c3 = st.columns(3)
-    qty = c1.number_input("Qty IN", min_value=0.0, step=1.0, key="qty_in")
-    dept = c2.text_input("Department", key="dept_in")
-    machine = c3.text_input("Machine Code", key="mc_in")
-
-    c4, c5, c6 = st.columns(3)
-    partno = c4.text_input("Part No.", key="pn_in")
-    shift = c5.text_input("Shift", key="shift_in")
-    operator = c6.text_input("Operator", key="op_in")
-
+    qty = st.number_input("Qty IN", min_value=0.0, step=1.0, key="qty_in")
+    dept = st.text_input("Department", key="dept_in")
+    machine = st.text_input("Machine Code", key="mc_in")
+    partno = st.text_input("Part No.", key="pn_in")
+    shift = st.text_input("Shift", key="shift_in")
+    operator = st.text_input("Operator", key="op_in")
     reason = st.text_input("Reason", value="Receive/Return", key="reason_in")
     remark = st.selectbox("Remark", options=["New","Modify","Return"], key="remark_in")
     refdoc = st.text_input("Reference Doc", key="ref_in")
@@ -275,7 +257,6 @@ with tab_in:
             record_txn(sb, payload)
             st.success("✅ IN transaction saved")
 
-            # แจ้ง Telegram ทุกครั้งที่รับเข้า
             msg = (
                 f"📥 IN Transaction\n"
                 f"Tool: {tool_code}\n"
@@ -291,8 +272,8 @@ with tab_in:
 # -------------------------------
 # Master Data
 # -------------------------------
-with tab_master:
-    st.markdown("## 🧰 Tool Master Data")
+elif menu == "🧰 Master Data":
+    st.subheader("🧰 Tool Master Data")
     dfm = get_master(sb)
     if not dfm.empty:
         styled_master = dfm.style.format({
@@ -306,25 +287,18 @@ with tab_master:
 # -------------------------------
 # Transactions
 # -------------------------------
-with tab_txn:
-    st.markdown("## 🧾 Recent Transactions (ล่าสุด 300 รายการ)")
+elif menu == "🧾 Transactions":
+    st.subheader("🧾 Recent Transactions (ล่าสุด 300 รายการ)")
     dft = pd.DataFrame(
         sb.table("tool_stock_txn").select("*").order("txn_time", desc=True).limit(300).execute().data
     )
     if not dft.empty:
         dft["txn_time"] = pd.to_datetime(dft["txn_time"], errors="coerce")
-
         if dft["txn_time"].dt.tz is None:
             dft["txn_time"] = dft["txn_time"].dt.tz_localize("Asia/Bangkok", nonexistent="shift_forward")
         else:
             dft["txn_time"] = dft["txn_time"].dt.tz_convert("Asia/Bangkok")
 
-        styled_txn = dft.style.format({
-            "qty": "{:,.0f}"
-        })
-
+        styled_txn = dft.style.format({"qty": "{:,.0f}"})
         st.dataframe(styled_txn, use_container_width=True)
         st.download_button("⬇️ Export Transactions CSV", data=dft.to_csv(index=False), file_name="transactions_export.csv")
-
-
-
