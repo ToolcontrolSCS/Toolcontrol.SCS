@@ -1,0 +1,19 @@
+# Core
+streamlit>=1.37.0
+pandas>=2.2.2
+requests>=2.32.3
+
+# Supabase client
+supabase>=2.3.0
+
+# Timezone handling
+pytz
+
+# Excel support
+openpyxl
+
+# Scheduling jobs (ถ้าจะทำ Daily Digest 08:00)
+schedule
+
+# Optional: สำหรับ export/reporting เพิ่มเติม
+xlsxwriter
