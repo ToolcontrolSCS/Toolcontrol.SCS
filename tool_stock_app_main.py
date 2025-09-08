@@ -90,7 +90,7 @@ def run_scheduler():
 # -------------------------------
 # MAIN
 # -------------------------------
-st.title("🛠️ Tool Stock Control Dashboard")
+st.title("🛠️ Stock Tool Control Dashboard")
 st.caption("Production support system | Timezone: GMT+7")
 
 sb = get_supabase()
@@ -302,3 +302,4 @@ elif menu == "🧾 Transactions":
         styled_txn = dft.style.format({"qty": "{:,.0f}"})
         st.dataframe(styled_txn, use_container_width=True)
         st.download_button("⬇️ Export Transactions CSV", data=dft.to_csv(index=False), file_name="transactions_export.csv")
+
